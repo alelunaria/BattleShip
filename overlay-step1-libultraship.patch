@@ -32,29 +32,34 @@ index 0000000..34258c1
 +    return enabled;
 +}
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index f6f7f61..cd97d08 100644
+index f6f7f61..db8bf95 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,9 @@
  
  #ifdef __APPLE__
  
 +#include "ship/utils/overlayMode.h"
++#include <objc/message.h>
++#include <objc/runtime.h>
  #include "fast/backends/gfx_metal.h"
  
  #include <vector>
-@@ -76,6 +77,10 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
+@@ -76,6 +79,13 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
  
      mLayer = (CA::MetalLayer*)SDL_RenderGetMetalLayer(renderer);
      mLayer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
 +    if (GfxOverlayModeEnabled()) {
 +        // Let the compositor blend this layer with the desktop (premultiplied alpha).
-+        mLayer->setOpaque(false);
++        // metal-cpp's CA::MetalLayer doesn't wrap CALayer::setOpaque, so message it directly.
++        using SetOpaqueFn = void (*)(id, SEL, bool);
++        reinterpret_cast<SetOpaqueFn>(objc_msgSend)(reinterpret_cast<id>(mLayer), sel_registerName("setOpaque:"),
++                                                    false);
 +    }
  
      mDevice = mLayer->device();
      mCommandQueue = mDevice->newCommandQueue();
-@@ -304,8 +309,16 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(const ShaderP
+@@ -304,8 +314,16 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(const ShaderP
          pipeline_descriptor->colorAttachments()->object(0)->setDestinationRGBBlendFactor(
              MTL::BlendFactorOneMinusSourceAlpha);
          pipeline_descriptor->colorAttachments()->object(0)->setRgbBlendOperation(MTL::BlendOperationAdd);
@@ -73,7 +78,7 @@ index f6f7f61..cd97d08 100644
          pipeline_descriptor->colorAttachments()->object(0)->setAlphaBlendOperation(MTL::BlendOperationAdd);
          pipeline_descriptor->colorAttachments()->object(0)->setWriteMask(MTL::ColorWriteMaskAll);
      } else {
-@@ -825,6 +838,9 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
+@@ -825,6 +843,9 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
      if (fb.mRenderPassDescriptor != nullptr)
          fb.mRenderPassDescriptor->release();
  
@@ -83,7 +88,7 @@ index f6f7f61..cd97d08 100644
      fb.mRenderPassDescriptor = render_pass_descriptor;
      fb.mRenderPassDescriptor->retain();
      fb.mRenderTarget = true;
-@@ -936,7 +952,7 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
+@@ -936,7 +957,7 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
              MTL::RenderPassDescriptor* clear_pass = MTL::RenderPassDescriptor::renderPassDescriptor();
              clear_pass->colorAttachments()->object(0)->setTexture(texture);
              clear_pass->colorAttachments()->object(0)->setLoadAction(MTL::LoadActionClear);
@@ -92,7 +97,7 @@ index f6f7f61..cd97d08 100644
              clear_pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreActionStore);
              MTL::CommandBuffer* clear_cb = mCommandQueue->commandBuffer();
              clear_cb->setLabel(NS::String::string("Clear new RT to black", NS::UTF8StringEncoding));
-@@ -968,6 +984,11 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
+@@ -968,6 +989,11 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
                  render_pass_descriptor->colorAttachments()->object(0)->setStoreAction(MTL::StoreActionStore);
              }
  
