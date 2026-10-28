@@ -1,0 +1,42 @@
+# Builds an unsigned (ad-hoc signed) BattleShip .dmg with the desktop-overlay
+# patch applied. Runs on GitHub's macOS runners, so no local compiler/admin needed.
+# Trigger: Actions tab -> "Overlay DMG" -> Run workflow.
+name: Overlay DMG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Apply overlay patch to libultraship
+        run: |
+          cd libultraship
+          git apply ../overlay-step1-libultraship.patch
+          git diff --stat
+
+      - name: Install build deps
+        run: |
+          brew install cmake ninja \
+            sdl2 glew libzip nlohmann-json tinyxml2 spdlog \
+            zip create-dmg dylibbundler coreutils
+          python3 -m pip install --break-system-packages Pillow
+
+      - name: Package .app + .dmg (ad-hoc signed, no notarization)
+        env:
+          SSB64_VERSION: us
+          DMG_TIMEOUT: "300"
+        run: bash scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BattleShip-overlay-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
