@@ -110,7 +110,7 @@ index f6f7f61..db8bf95 100644
                  fb.mRenderPassDescriptor->release();
  
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index ddd8180..7dcad61 100644
+index ddd8180..90554ed 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -28,6 +28,7 @@
@@ -121,7 +121,18 @@ index ddd8180..7dcad61 100644
  #else
  #include <SDL2/SDL.h>
  #define GL_GLEXT_PROTOTYPES 1
-@@ -422,7 +423,29 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -364,6 +365,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+ #endif
+ 
++    if (GfxOverlayModeEnabled()) {
++        // The overlay never has keyboard focus, so controllers must work in the background.
++        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++    }
+     SDL_Init(SDL_INIT_VIDEO);
+ 
+     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
+@@ -422,7 +427,29 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          flags = flags | SDL_WINDOW_METAL;
      }
  
@@ -152,10 +163,10 @@ index ddd8180..7dcad61 100644
      // Get Windows window handle and use it to subclass the window procedure.
      // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
 diff --git a/src/ship/utils/macUtils.mm b/src/ship/utils/macUtils.mm
-index fe1add9..8e3e591 100644
+index fe1add9..aa65ec5 100644
 --- a/src/ship/utils/macUtils.mm
 +++ b/src/ship/utils/macUtils.mm
-@@ -25,4 +25,23 @@ bool isNativeMacOSFullscreenActive(SDL_Window *window) {
+@@ -25,4 +25,45 @@ bool isNativeMacOSFullscreenActive(SDL_Window *window) {
      }
      return false;
  }
@@ -176,6 +187,28 @@ index fe1add9..8e3e591 100644
 +                                    NSWindowCollectionBehaviorStationary |
 +                                    NSWindowCollectionBehaviorFullScreenAuxiliary];
 +    [nswindow setIgnoresMouseEvents:clickThrough ? YES : NO];
++
++    // Escape hatches: a click-through window can't be clicked or focused, so give the user
++    // a menu-bar Quit item (needs no permissions) and an optional auto-quit timer for testing.
++    static NSStatusItem *sOverlayStatusItem = nil;
++    if (sOverlayStatusItem == nil) {
++        sOverlayStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
++        sOverlayStatusItem.button.title = @"\u2694 BattleShip";
++        NSMenu *menu = [[NSMenu alloc] init];
++        NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit BattleShip Overlay"
++                                                      action:@selector(terminate:)
++                                               keyEquivalent:@"q"];
++        [quit setTarget:NSApp];
++        [menu addItem:quit];
++        sOverlayStatusItem.menu = menu;
++    }
++    const char *timeoutEnv = getenv("BATTLESHIP_OVERLAY_TIMEOUT");
++    if (timeoutEnv != NULL && atof(timeoutEnv) > 0.0) {
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(timeoutEnv) * NSEC_PER_SEC)),
++                       dispatch_get_main_queue(), ^{
++                           [NSApp terminate:nil];
++                       });
++    }
 +}
 +
  #endif
