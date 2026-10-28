@@ -1,0 +1,177 @@
+diff --git a/include/ship/utils/macUtils.h b/include/ship/utils/macUtils.h
+index caf0caf..950cf3c 100644
+--- a/include/ship/utils/macUtils.h
++++ b/include/ship/utils/macUtils.h
+@@ -6,6 +6,9 @@ extern "C" {
+ #endif
+ void toggleNativeMacOSFullscreen(SDL_Window* window);
+ bool isNativeMacOSFullscreenActive(SDL_Window* window);
++// Makes the window a transparent, shadowless, always-on-top overlay. When
++// clickThrough is true, all mouse events pass through to the windows below.
++void configureMacOSTransparentOverlay(SDL_Window* window, bool clickThrough);
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/include/ship/utils/overlayMode.h b/include/ship/utils/overlayMode.h
+new file mode 100644
+index 0000000..34258c1
+--- /dev/null
++++ b/include/ship/utils/overlayMode.h
+@@ -0,0 +1,13 @@
++#pragma once
++#include <cstdlib>
++
++// Desktop-overlay mode: a borderless, always-on-top, transparent, click-through
++// window. Enabled by launching with BATTLESHIP_OVERLAY=1 (dev switch; a proper
++// CVar/menu toggle can replace this later).
++inline bool GfxOverlayModeEnabled() {
++    static const bool enabled = [] {
++        const char* v = std::getenv("BATTLESHIP_OVERLAY");
++        return v != nullptr && v[0] != '\0' && v[0] != '0';
++    }();
++    return enabled;
++}
+diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
+index f6f7f61..cd97d08 100644
+--- a/src/fast/backends/gfx_metal.cpp
++++ b/src/fast/backends/gfx_metal.cpp
+@@ -7,6 +7,7 @@
+ 
+ #ifdef __APPLE__
+ 
++#include "ship/utils/overlayMode.h"
+ #include "fast/backends/gfx_metal.h"
+ 
+ #include <vector>
+@@ -76,6 +77,10 @@ bool GfxRenderingAPIMetal::MetalInit(SDL_Renderer* renderer) {
+ 
+     mLayer = (CA::MetalLayer*)SDL_RenderGetMetalLayer(renderer);
+     mLayer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
++    if (GfxOverlayModeEnabled()) {
++        // Let the compositor blend this layer with the desktop (premultiplied alpha).
++        mLayer->setOpaque(false);
++    }
+ 
+     mDevice = mLayer->device();
+     mCommandQueue = mDevice->newCommandQueue();
+@@ -304,8 +309,16 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(const ShaderP
+         pipeline_descriptor->colorAttachments()->object(0)->setDestinationRGBBlendFactor(
+             MTL::BlendFactorOneMinusSourceAlpha);
+         pipeline_descriptor->colorAttachments()->object(0)->setRgbBlendOperation(MTL::BlendOperationAdd);
+-        pipeline_descriptor->colorAttachments()->object(0)->setSourceAlphaBlendFactor(MTL::BlendFactorZero);
+-        pipeline_descriptor->colorAttachments()->object(0)->setDestinationAlphaBlendFactor(MTL::BlendFactorOne);
++        if (GfxOverlayModeEnabled()) {
++            // Accumulate real coverage so translucent pixels over an empty (alpha 0)
++            // target stay visible instead of being dropped.
++            pipeline_descriptor->colorAttachments()->object(0)->setSourceAlphaBlendFactor(MTL::BlendFactorOne);
++            pipeline_descriptor->colorAttachments()->object(0)->setDestinationAlphaBlendFactor(
++                MTL::BlendFactorOneMinusSourceAlpha);
++        } else {
++            pipeline_descriptor->colorAttachments()->object(0)->setSourceAlphaBlendFactor(MTL::BlendFactorZero);
++            pipeline_descriptor->colorAttachments()->object(0)->setDestinationAlphaBlendFactor(MTL::BlendFactorOne);
++        }
+         pipeline_descriptor->colorAttachments()->object(0)->setAlphaBlendOperation(MTL::BlendOperationAdd);
+         pipeline_descriptor->colorAttachments()->object(0)->setWriteMask(MTL::ColorWriteMaskAll);
+     } else {
+@@ -825,6 +838,9 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
+     if (fb.mRenderPassDescriptor != nullptr)
+         fb.mRenderPassDescriptor->release();
+ 
++    if (GfxOverlayModeEnabled()) {
++        render_pass_descriptor->colorAttachments()->object(0)->setClearColor(MTL::ClearColor(0.0, 0.0, 0.0, 0.0));
++    }
+     fb.mRenderPassDescriptor = render_pass_descriptor;
+     fb.mRenderPassDescriptor->retain();
+     fb.mRenderTarget = true;
+@@ -936,7 +952,7 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
+             MTL::RenderPassDescriptor* clear_pass = MTL::RenderPassDescriptor::renderPassDescriptor();
+             clear_pass->colorAttachments()->object(0)->setTexture(texture);
+             clear_pass->colorAttachments()->object(0)->setLoadAction(MTL::LoadActionClear);
+-            clear_pass->colorAttachments()->object(0)->setClearColor(MTL::ClearColor(0.0, 0.0, 0.0, 1.0));
++            clear_pass->colorAttachments()->object(0)->setClearColor(MTL::ClearColor(0.0, 0.0, 0.0, GfxOverlayModeEnabled() ? 0.0 : 1.0));
+             clear_pass->colorAttachments()->object(0)->setStoreAction(MTL::StoreActionStore);
+             MTL::CommandBuffer* clear_cb = mCommandQueue->commandBuffer();
+             clear_cb->setLabel(NS::String::string("Clear new RT to black", NS::UTF8StringEncoding));
+@@ -968,6 +984,11 @@ void GfxRenderingAPIMetal::UpdateFramebufferParameters(int fb_id, uint32_t width
+                 render_pass_descriptor->colorAttachments()->object(0)->setStoreAction(MTL::StoreActionStore);
+             }
+ 
++            if (GfxOverlayModeEnabled()) {
++                render_pass_descriptor->colorAttachments()->object(0)->setClearColor(
++                    MTL::ClearColor(0.0, 0.0, 0.0, 0.0));
++            }
++
+             if (fb.mRenderPassDescriptor != nullptr)
+                 fb.mRenderPassDescriptor->release();
+ 
+diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
+index ddd8180..7dcad61 100644
+--- a/src/fast/backends/gfx_sdl2.cpp
++++ b/src/fast/backends/gfx_sdl2.cpp
+@@ -28,6 +28,7 @@
+ #include <SDL.h>
+ #include "fast/backends/gfx_metal.h"
+ #include "ship/utils/macUtils.h"
++#include "ship/utils/overlayMode.h"
+ #else
+ #include <SDL2/SDL.h>
+ #define GL_GLEXT_PROTOTYPES 1
+@@ -422,7 +423,29 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+         flags = flags | SDL_WINDOW_METAL;
+     }
+ 
++    const bool overlayMode = GfxOverlayModeEnabled();
++#if defined(__APPLE__)
++    if (overlayMode) {
++        // Cover the whole primary display with a borderless, always-on-top window.
++        SDL_Rect bounds;
++        if (SDL_GetDisplayBounds(0, &bounds) == 0) {
++            posX = bounds.x;
++            posY = bounds.y;
++            mWindowWidth = bounds.w;
++            mWindowHeight = bounds.h;
++        }
++        flags &= ~SDL_WINDOW_RESIZABLE;
++        flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP;
++        startFullScreen = false; // the overlay is sized by hand, not fullscreened
++    }
++#endif
++
+     mWnd = SDL_CreateWindow(title, posX, posY, mWindowWidth, mWindowHeight, flags);
++#if defined(__APPLE__)
++    if (overlayMode) {
++        configureMacOSTransparentOverlay(mWnd, true);
++    }
++#endif
+ #ifdef _WIN32
+     // Get Windows window handle and use it to subclass the window procedure.
+     // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
+diff --git a/src/ship/utils/macUtils.mm b/src/ship/utils/macUtils.mm
+index fe1add9..8e3e591 100644
+--- a/src/ship/utils/macUtils.mm
++++ b/src/ship/utils/macUtils.mm
+@@ -25,4 +25,23 @@ bool isNativeMacOSFullscreenActive(SDL_Window *window) {
+     }
+     return false;
+ }
++
++// Turns the SDL window into a transparent desktop overlay.
++void configureMacOSTransparentOverlay(SDL_Window *window, bool clickThrough) {
++    SDL_SysWMinfo wmInfo;
++    SDL_VERSION(&wmInfo.version);
++    if (!SDL_GetWindowWMInfo(window, &wmInfo)) {
++        return;
++    }
++    NSWindow *nswindow = wmInfo.info.cocoa.window;
++    [nswindow setOpaque:NO];
++    [nswindow setBackgroundColor:[NSColor clearColor]];
++    [nswindow setHasShadow:NO];
++    [nswindow setLevel:NSScreenSaverWindowLevel]; // above the Dock and menu bar
++    [nswindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces |
++                                    NSWindowCollectionBehaviorStationary |
++                                    NSWindowCollectionBehaviorFullScreenAuxiliary];
++    [nswindow setIgnoresMouseEvents:clickThrough ? YES : NO];
++}
++
+ #endif
+\ No newline at end of file
