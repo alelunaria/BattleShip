@@ -163,13 +163,32 @@ index ddd8180..90554ed 100644
      // Get Windows window handle and use it to subclass the window procedure.
      // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
 diff --git a/src/ship/utils/macUtils.mm b/src/ship/utils/macUtils.mm
-index fe1add9..aa65ec5 100644
+index fe1add9..c977e2e 100644
 --- a/src/ship/utils/macUtils.mm
 +++ b/src/ship/utils/macUtils.mm
-@@ -25,4 +25,45 @@ bool isNativeMacOSFullscreenActive(SDL_Window *window) {
+@@ -25,4 +25,72 @@ bool isNativeMacOSFullscreenActive(SDL_Window *window) {
      }
      return false;
  }
++
++// Menu-bar helper: lets the user flip the overlay between click-through (default) and
++// "interactive" mode, where the window takes keyboard focus so keyboard input reaches the game.
++@interface BSOverlayController : NSObject
++@property(nonatomic, weak) NSWindow *window;
++- (void)toggleInteractive:(NSMenuItem *)item;
++@end
++
++@implementation BSOverlayController
++- (void)toggleInteractive:(NSMenuItem *)item {
++    BOOL turnOn = (item.state != NSControlStateValueOn);
++    item.state = turnOn ? NSControlStateValueOn : NSControlStateValueOff;
++    [self.window setIgnoresMouseEvents:turnOn ? NO : YES];
++    if (turnOn) {
++        [NSApp activateIgnoringOtherApps:YES];
++        [self.window makeKeyAndOrderFront:nil];
++    }
++}
++@end
 +
 +// Turns the SDL window into a transparent desktop overlay.
 +void configureMacOSTransparentOverlay(SDL_Window *window, bool clickThrough) {
@@ -195,6 +214,14 @@ index fe1add9..aa65ec5 100644
 +        sOverlayStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
 +        sOverlayStatusItem.button.title = @"\u2694 BattleShip";
 +        NSMenu *menu = [[NSMenu alloc] init];
++        static BSOverlayController *sOverlayController = nil;
++        sOverlayController = [[BSOverlayController alloc] init];
++        sOverlayController.window = nswindow;
++        NSMenuItem *interactive = [[NSMenuItem alloc] initWithTitle:@"Keyboard mode (blocks desktop clicks)"
++                                                             action:@selector(toggleInteractive:)
++                                                      keyEquivalent:@""];
++        [interactive setTarget:sOverlayController];
++        [menu addItem:interactive];
 +        NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit BattleShip Overlay"
 +                                                      action:@selector(terminate:)
 +                                               keyEquivalent:@"q"];
